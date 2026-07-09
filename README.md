@@ -128,6 +128,8 @@ TENCENTCLOUD_DESCRIPTION=攻防演练封禁
 封禁时自动检查：如果输入的 IP 属于白名单中的任一网段，则**跳过封禁**，页面显示 🟡 提示。
 
 > 数据保存在 `whitelist.json`，也兼容旧版 `whitelist.txt` 格式，两者合并去重。修改后立即生效，无需重启服务。
+>
+> 首次使用可参考 `whitelist.example.json` 和 `whitelist.example.txt` 的格式，复制后填入自己的业务 IP。
 
 ### 封禁查询与解封
 
@@ -224,8 +226,10 @@ IPBanTool/
 ├── ip_utils.py             # IP 校验与标准化
 ├── providers.py            # 阿里云 + 腾讯云 API 实现
 ├── requirements.txt        # Python 依赖
-├── whitelist.txt            # 白名单（文本格式，兼容旧版）
-├── whitelist.json           # 白名单（页面管理，带分组信息）
+├── whitelist.txt            # 白名单（文本格式，兼容旧版，已 gitignore）
+├── whitelist.json           # 白名单（页面管理，带分组信息，已 gitignore）
+├── whitelist.example.txt    # 白名单模板（文本格式，可复制参考）
+├── whitelist.example.json   # 白名单模板（JSON 格式，可复制参考）
 ├── build.bat               # PyInstaller 打包脚本（Windows）
 ├── templates/
 │   └── index.html          # 前端页面
