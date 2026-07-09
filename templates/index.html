@@ -173,6 +173,7 @@
     <div class="card-title">📋 执行结果</div>
     <div id="result-body"></div>
     <div id="summary-area"></div>
+  </div>
 
   <!-- 白名单管理卡片 -->
   <div class="card" id="wl-card">
@@ -182,10 +183,12 @@
       <input class="wl-input" id="wl-ip-input" placeholder="输入 IP（如 10.0.1.5）" />
       <input class="wl-input" id="wl-group-input" placeholder="分组（如 政务云）" style="flex:0 0 130px" list="wl-group-suggest" />
       <datalist id="wl-group-suggest">
-        <option value="政务云">
+        <option value="政务云-太极">
+        <option value="政务云-首信">
         <option value="腾讯云">
         <option value="京版机房">
-        <option value="公司出口">
+        <option value="左岸工社">
+        <option value="阿里云">
       </datalist>
       <button class="wl-btn-add" id="wl-btn-add">+ 添加</button>
     </div>
@@ -384,6 +387,8 @@ function renderResults(results, summary) {
 }
 
 // ─── 启动 ──────────────────────────────────────────────
+
+loadProviders();
 
 // ─── 白名单管理 ──────────────────────────────────────
 const wlIpInput = document.getElementById('wl-ip-input');
