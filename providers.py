@@ -119,7 +119,12 @@ def _get_alibaba_address_list(client, book_name: str, group_type: str) -> list[s
     for item in resp.body.acls:
         if item.group_name == book_name and item.group_type == group_type:
             if item.address_list:
-                return [x.strip() for x in item.address_list.split(",") if x.strip()]
+                raw = item.address_list
+                # 阿里云 SDK 可能返回字符串（逗号分隔）或列表
+                if isinstance(raw, str):
+                    return [x.strip() for x in raw.split(",") if x.strip()]
+                else:
+                    return [str(x).strip() for x in raw if x and str(x).strip()]
     return None
 
 
@@ -155,7 +160,7 @@ def query_alibaba(ip_cidr: str, cfg: ProviderConfig) -> list[dict]:
                 entry_net = ipaddress.ip_network(entry, strict=False)
                 if search_net.subnet_of(entry_net):
                     matched.append(entry)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
 
         for m in matched:
@@ -191,11 +196,30 @@ def unban_alibaba(ip_cidr: str, cfg: ProviderConfig) -> str:
         if not book_uuid:
             return f"未找到地址簿 '{book_name}'"
 
+        # 阿里云 ModifyAddressBook 不支持单独删除条目，需要先用 Cover 覆盖
+        # ⚠️ 安全措施：先读取完整列表，校验无误后再覆盖
+        entries = _get_alibaba_address_list(client, book_name, group_type)
+        if not entries:
+            return f"地址簿 '{book_name}' 为空，无法操作"
+
+        # 确认要删除的 IP 确实在列表中
+        if ip_cidr not in entries:
+            return f"地址簿中未找到 {ip_cidr}"
+
+        # 构建新列表（确保只移除了 1 条）
+        new_entries = [e for e in entries if e != ip_cidr]
+        removed_count = len(entries) - len(new_entries)
+        if removed_count == 0:
+            return f"地址簿中未找到 {ip_cidr}"
+
+        print(f"[UNBAN] 从 {book_name} 移除 {ip_cidr}，共 {len(entries)} 条 → {len(new_entries)} 条")
+
+        new_address_list = ",".join(new_entries)
         req = cloudfw_models.ModifyAddressBookRequest(
             group_uuid=book_uuid,
             group_name=book_name,
-            address_list=ip_cidr,
-            modify_mode="Remove",
+            address_list=new_address_list,
+            modify_mode="Cover",
             description=cfg.get("DESCRIPTION"),
         )
         client.modify_address_book(req)
@@ -504,7 +528,7 @@ def query_tencent(ip_cidr: str, cfg: ProviderConfig) -> list[dict]:
                         "location_id": sg_id,
                         "matched_cidr": banned_cidr,
                     })
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
 
     if not results:
@@ -537,7 +561,7 @@ def unban_tencent(ip_cidr: str, sg_id: str, cfg: ProviderConfig) -> str:
         policy_set = vpc_models.SecurityGroupPolicySet()
         policy_set.Ingress = [policy]
 
-        req.Policies = policy_set
+        req.SecurityGroupPolicySet = policy_set
         client.DeleteSecurityGroupPolicies(req)
         return "ok"
 
