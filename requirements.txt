@@ -1,0 +1,6 @@
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-dotenv>=1.0.0
+alibabacloud_cloudfw20171207>=1.2.0
+alibabacloud_tea_openapi>=0.3.0
+tencentcloud-sdk-python>=3.0.0
