@@ -8,3 +8,4 @@ build/
 # 白名单文件（含生产业务 IP，禁止提交）
 whitelist.txt
 whitelist.json
+# 注意：如果之前提交过需先 git rm --cached 再推送
