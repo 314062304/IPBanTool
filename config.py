@@ -114,6 +114,7 @@ class AppConfig:
         self.env_path = ENV_PATH
         self.load_error: str | None = None
         self.has_any_provider = False
+        self.whitelist_path: str | None = None
 
     def load(self) -> None:
         """从 ../.env 加载配置。"""
@@ -141,6 +142,13 @@ class AppConfig:
                 f"已读取 {env_path}，但未检测到有效的云平台配置。\n"
                 f"请确保文件中包含阿里云(ALIBABACLOUD_*)或腾讯云(TENCENTCLOUD_*)的完整凭据。"
             )
+
+        # 白名单文件路径
+        raw_path = env.get("WHITELIST_PATH", "").strip()
+        if raw_path:
+            self.whitelist_path = raw_path
+        else:
+            self.whitelist_path = str(PROJECT_DIR / "whitelist.txt")
 
     def get_configured_providers(self) -> list[ProviderConfig]:
         """返回已配置的 provider 列表。"""

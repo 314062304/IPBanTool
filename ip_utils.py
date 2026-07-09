@@ -105,3 +105,49 @@ def validate_cidr(cidr: str) -> str | None:
 def normalize_cidr(cidr: str) -> str:
     """标准化 CIDR 格式。"""
     return str(ipaddress.ip_network(cidr, strict=False))
+
+
+def load_whitelist(path: str) -> list:
+    """从文件加载白名单 CIDR，返回 ip_network 对象列表。
+
+    文件格式：
+    - 每行一个 CIDR，自动 trim 空格
+    - # 开头的行为注释，空行忽略
+    - 无效行打印 WARN 后跳过
+    - 文件不存在时打印 INFO 并返回空列表
+    """
+    whitelist = []
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    network = ipaddress.ip_network(line, strict=False)
+                    whitelist.append(network)
+                except ValueError:
+                    print(f"[WARN] 白名单文件第{line_num}行无效，已跳过: {line}")
+    except FileNotFoundError:
+        print(f"[INFO] 白名单文件不存在，跳过白名单检查: {path}")
+    except Exception as e:
+        print(f"[WARN] 读取白名单文件失败: {e}")
+    return whitelist
+
+
+def is_whitelisted(ip_cidr: str, whitelist: list) -> bool:
+    """检查 IP 是否命中白名单（IP 是白名单中任一 CIDR 的子网）。"""
+    if not whitelist:
+        return False
+    try:
+        network = ipaddress.ip_network(ip_cidr, strict=False)
+    except ValueError:
+        return False
+    for wl_net in whitelist:
+        try:
+            if network.subnet_of(wl_net):
+                return True
+        except TypeError:
+            # IPv4 vs IPv6 不匹配，跳过
+            continue
+    return False

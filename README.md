@@ -16,6 +16,7 @@
 | **自动去重** | 重复 IP 自动识别，不重复提交 |
 | **自动管理腾讯云安全组** | 自动创建安全组、绑定 CVM 实例，满 100 条自动新建 |
 | **导出为 exe** | 不需要 Python 环境，双击即可运行 |
+| **白名单保护** | 封禁前自动检查白名单文件，命中生产 IP 则跳过，避免误封 |
 
 ---
 
@@ -82,6 +83,9 @@ TENCENTCLOUD_SG_MAX_RULES=100
 # 封禁描述（默认"攻防演练封禁"，可按需改为"重保封禁"等）
 ALIBABACLOUD_DESCRIPTION=攻防演练封禁
 TENCENTCLOUD_DESCRIPTION=攻防演练封禁
+
+# 白名单文件路径（默认 whitelist.txt）
+# WHITELIST_PATH=whitelist.txt
 ```
 
 ---
@@ -105,7 +109,22 @@ TENCENTCLOUD_DESCRIPTION=攻防演练封禁
 - 私有地址（10.x.x.x、192.168.x.x 等）自动拦截
 - 无效 IP 自动跳过
 
----
+### 白名单保护
+
+编辑 `whitelist.txt`，将生产业务 IP 或网段填入（每行一个 CIDR，# 开头为注释）：
+
+```txt
+# 生产业务网段
+10.0.0.0/8
+172.16.0.0/12
+
+# 公司出口 IP
+203.0.113.10/32
+```
+
+封禁时自动检查：如果输入的 IP 属于白名单中的任一网段，则**跳过封禁**，页面显示 🟡 提示。
+
+> 编辑白名单文件后立即生效，无需重启服务。
 
 ---
 
@@ -187,6 +206,7 @@ IPBanTool/
 ├── ip_utils.py             # IP 校验与标准化
 ├── providers.py            # 阿里云 + 腾讯云 API 实现
 ├── requirements.txt        # Python 依赖
+├── whitelist.txt            # 白名单（生产业务 IP，封禁前自动检查）
 ├── build.bat               # PyInstaller 打包脚本（Windows）
 ├── templates/
 │   └── index.html          # 前端页面

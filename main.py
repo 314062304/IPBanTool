@@ -113,30 +113,42 @@ async def api_ban(req: BanRequest):
     if not valid_providers:
         raise HTTPException(status_code=400, detail="没有可用的封禁平台")
 
+    # 3.5 白名单检查
+    whitelist_cidrs = ip_utils.load_whitelist(config.whitelist_path) if config.whitelist_path else []
+
     # 4. 执行封禁
     results: dict[str, dict[str, str]] = {}
     ok_count = 0
     fail_count = 0
+    whitelisted_count = 0
 
     for ip_cidr in parsed_ips:
         ip_results: dict[str, str] = {}
-        for pk, cfg in valid_providers:
-            try:
-                # 在线程池中执行，避免阻塞事件循环
-                outcome = await asyncio.to_thread(ban_on_provider, pk, ip_cidr, cfg)
-                ip_results[pk] = outcome
-                if outcome == "ok":
-                    ok_count += 1
-                else:
+
+        # 白名单命中检查
+        if whitelist_cidrs and ip_utils.is_whitelisted(ip_cidr, whitelist_cidrs):
+            print(f"[WHITELIST] 跳过封禁白名单 IP: {ip_cidr}")
+            for pk, cfg in valid_providers:
+                ip_results[pk] = "whitelisted"
+            whitelisted_count += 1
+        else:
+            for pk, cfg in valid_providers:
+                try:
+                    # 在线程池中执行，避免阻塞事件循环
+                    outcome = await asyncio.to_thread(ban_on_provider, pk, ip_cidr, cfg)
+                    ip_results[pk] = outcome
+                    if outcome == "ok":
+                        ok_count += 1
+                    else:
+                        fail_count += 1
+                except Exception as e:
+                    ip_results[pk] = f"执行异常: {e}"
                     fail_count += 1
-            except Exception as e:
-                ip_results[pk] = f"执行异常: {e}"
-                fail_count += 1
         results[ip_cidr] = ip_results
 
     return BanResponse(
         results=results,
-        summary={"ok": ok_count, "fail": fail_count},
+        summary={"ok": ok_count, "fail": fail_count, "whitelisted": whitelisted_count},
     )
 
 
