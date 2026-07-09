@@ -39,10 +39,23 @@ python main.py
 
 ### 方式二：exe 启动（推荐分发）
 
-1. 将 `IPBanTool.exe` 和 `templates/` 文件夹放在同一目录
-2. 在同级目录下创建 `.env`（见下方配置）
-3. 双击 `IPBanTool.exe`
-4. 浏览器访问 **http://localhost:5000**
+> **运行要求：** exe 为单文件打包，前端页面已编译在内，无需额外文件。
+> **仅需将 `.env` 放在 exe 同级目录**，如下所示：
+
+```
+exe 所在目录/
+├── IPBanTool.exe       # 主程序
+├── .env                # 云平台凭据（需自行创建）
+├── whitelist.json      # 白名单（页面管理后自动生成，可选）
+└── whitelist.txt       # 白名单（兼容旧版，可选）
+```
+
+1. 在 exe 同级目录创建 `.env`（见下方配置）
+2. 双击 `IPBanTool.exe`
+3. 浏览器访问 **http://localhost:5000**
+
+> **如何打包 exe？** 运行 `build.bat` 即可，打包配置见 `IPBanTool.spec`。
+> 打包前确认 `templates/` 目录存在且完整，无需额外修改。
 
 ---
 

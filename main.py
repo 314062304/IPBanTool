@@ -20,7 +20,7 @@ from providers import ban_on_provider, query_on_provider, unban_on_provider, get
 
 # ─── 应用初始化 ───────────────────────────────────────────────
 
-app = FastAPI(title="IPBanTool", version="1.0.0")
+app = FastAPI(title="IPBanTool", version="2.0.0")
 
 # 支持 PyInstaller 打包模式（sys._MEIPASS）和开发模式
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):

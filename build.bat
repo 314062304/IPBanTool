@@ -1,6 +1,9 @@
 @echo off
 REM IPBanTool 打包脚本
-REM 打包为单文件 exe，.env 和 templates 不包含在 exe 内
+REM 打包为单文件 exe，以下文件不在 exe 内，需放在 exe 同级目录：
+REM   - .env               （云平台凭据）
+REM   - whitelist.json     （白名单，页面管理自动生成）
+REM   - whitelist.txt      （白名单，兼容旧版文本格式）
 
 set VENV_PYTHON=D:\Claudecode\Project\AuthDash\.venv\Scripts\python.exe
 set PROJECT_DIR=D:\Claudecode\Project\IPBanTool
