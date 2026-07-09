@@ -135,6 +135,26 @@
   .wl-btn-del { padding: 2px 10px; border: none; border-radius: 4px; font-size: .78rem; cursor: pointer; background: rgba(231,76,60,0.15); color: #e74c3c; transition: background .15s; }
   .wl-btn-del:hover { background: rgba(231,76,60,0.3); }
   .wl-empty { color: #484f58; font-size: .85rem; text-align: center; padding: 24px 0; }
+
+  /* ─── 解封查询 ────────────────────────── */
+  .unban-input-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .unban-input { flex: 1; min-width: 200px; padding: 8px 12px; background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #f0f6fc; font-size: .85rem; font-family: 'SF Mono','Fira Code','Consolas',monospace; outline: none; transition: border .2s; }
+  .unban-input:focus { border-color: #58a6ff; }
+  .unban-input::placeholder { color: #484f58; }
+  .unban-btn-query { padding: 8px 20px; border: none; border-radius: 8px; font-size: .85rem; font-weight: 600; cursor: pointer; background: linear-gradient(135deg,#58a6ff,#3fb950); color: #fff; white-space: nowrap; }
+  .unban-btn-query:hover:not(:disabled) { opacity: .88; }
+  .unban-btn-query:disabled { opacity: .45; cursor: not-allowed; }
+  .unban-provider { margin-bottom: 12px; padding: 8px 12px; background: rgba(22,27,34,0.5); border-radius: 8px; }
+  .unban-provider-header { font-size: .85rem; font-weight: 600; margin-bottom: 4px; }
+  .unban-provider-header.found { color: #e74c3c; }
+  .unban-provider-header.not-found { color: #3fb950; }
+  .unban-location { font-size: .80rem; color: #8b949e; margin-left: 4px; }
+  .unban-match-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 4px 16px; font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: .85rem; }
+  .unban-match-cidr { color: #f0f6fc; }
+  .unban-btn-do { padding: 4px 14px; border: none; border-radius: 4px; font-size: .78rem; font-weight: 500; cursor: pointer; background: rgba(231,76,60,0.15); color: #e74c3c; transition: background .15s; }
+  .unban-btn-do:hover:not(:disabled) { background: rgba(231,76,60,0.3); }
+  .unban-btn-do:disabled { opacity: .4; cursor: not-allowed; }
+  .unban-empty { color: #484f58; font-size: .85rem; text-align: center; padding: 24px 0; }
 </style>
 </head>
 <body>
@@ -173,6 +193,20 @@
     <div class="card-title">📋 执行结果</div>
     <div id="result-body"></div>
     <div id="summary-area"></div>
+  </div>
+
+  <!-- 解封查询卡片 -->
+  <div class="card" id="unban-card">
+    <div class="card-title">🔍 解封查询</div>
+
+    <div class="unban-input-row">
+      <input class="unban-input" id="unban-ip-input" placeholder="输入 IP 查询是否已被封禁（如 1.2.3.4）" />
+      <button class="unban-btn-query" id="unban-btn-query">🔍 查询</button>
+    </div>
+
+    <div id="unban-results">
+      <div class="unban-empty">输入 IP 后点击查询</div>
+    </div>
   </div>
 
   <!-- 白名单管理卡片 -->
@@ -465,6 +499,103 @@ wlBtnAdd.addEventListener('click', addWhitelistEntry);
 wlIpInput.addEventListener('keydown', e => { if (e.key === 'Enter') addWhitelistEntry(); });
 
 loadWhitelist();
+
+// ─── 解封查询 ──────────────────────────────────────
+const unbanInput = document.getElementById('unban-ip-input');
+const unbanQueryBtn = document.getElementById('unban-btn-query');
+const unbanResults = document.getElementById('unban-results');
+
+async function queryBanned() {
+  const ip = unbanInput.value.trim();
+  if (!ip) { showStatus('info', '📝 请输入要查询的 IP'); return; }
+
+  unbanQueryBtn.disabled = true;
+  unbanQueryBtn.textContent = '⏳ 查询中...';
+  unbanResults.innerHTML = '<div class="unban-empty"><span class="spinner"></span> 查询中...</div>';
+
+  try {
+    const resp = await fetch('/api/banned/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      unbanResults.innerHTML = `<div class="warn-box fail">❌ ${escHtml(data.detail)}</div>`;
+      return;
+    }
+
+    renderUnbanResults(data.results || []);
+  } catch (e) {
+    unbanResults.innerHTML = `<div class="warn-box fail">❌ 网络错误: ${escHtml(e.message)}</div>`;
+  } finally {
+    unbanQueryBtn.disabled = false;
+    unbanQueryBtn.textContent = '🔍 查询';
+  }
+}
+
+function renderUnbanResults(results) {
+  if (!results.length) {
+    unbanResults.innerHTML = '<div class="unban-empty">未查询到结果</div>';
+    return;
+  }
+
+  let anyFound = false;
+  let html = '';
+
+  for (const r of results) {
+    if (r.found) {
+      anyFound = true;
+      html += `<div class="unban-provider"><div class="unban-provider-header found">🔴 ${escHtml(r.provider_name)}</div>`;
+      html += `<div class="unban-location">📁 ${escHtml(r.location)}</div>`;
+      html += `<div class="unban-match-row"><span class="unban-match-cidr">${escHtml(r.matched_cidr)}</span>`;
+      const locId = r.location_id || '';
+      html += `<button class="unban-btn-do" onclick="unbanIp('${escHtml(r.matched_cidr)}', '${escHtml(r.provider)}', '${escHtml(locId)}', this)">解封</button></div></div>`;
+    } else {
+      html += `<div class="unban-provider"><div class="unban-provider-header not-found">✅ ${escHtml(r.provider_name)} <span class="unban-location">该 IP 未被封禁</span></div></div>`;
+    }
+  }
+
+  if (!anyFound) {
+    html = '<div class="unban-empty">✅ 该 IP 在各平台均未被封禁</div>';
+  }
+
+  unbanResults.innerHTML = html;
+}
+
+async function unbanIp(ip, provider, locationId, btnEl) {
+  if (!confirm(`确定要从 ${provider} 解封 ${ip} 吗？`)) return;
+
+  btnEl.disabled = true;
+  btnEl.textContent = '⏳';
+
+  try {
+    const resp = await fetch('/api/unban', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, provider, location_id: locationId || null }),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      btnEl.textContent = '✅ 已解封';
+      btnEl.style.opacity = '0.5';
+      showStatus('ok', `✅ ${escHtml(data.msg)}`);
+    } else {
+      btnEl.disabled = false;
+      btnEl.textContent = '解封';
+      showStatus('fail', '❌ ' + escHtml(data.detail));
+    }
+  } catch (e) {
+    btnEl.disabled = false;
+    btnEl.textContent = '解封';
+    showStatus('fail', '❌ 网络错误: ' + escHtml(e.message));
+  }
+}
+
+unbanQueryBtn.addEventListener('click', queryBanned);
+unbanInput.addEventListener('keydown', e => { if (e.key === 'Enter') queryBanned(); });
 </script>
 </body>
 </html>

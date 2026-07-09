@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 import ip_utils
 from config import config, AppConfig
-from providers import ban_on_provider, get_available_providers
+from providers import ban_on_provider, query_on_provider, unban_on_provider, get_available_providers
 
 # ─── 应用初始化 ───────────────────────────────────────────────
 
@@ -63,6 +63,16 @@ class WhitelistAddRequest(BaseModel):
 class WhitelistDeleteRequest(BaseModel):
     ip: str
     group: str
+
+
+class BannedQueryRequest(BaseModel):
+    ip: str
+
+
+class UnbanRequest(BaseModel):
+    ip: str
+    provider: str
+    location_id: str | None = None
 
 
 # ─── 路由 ──────────────────────────────────────────────────────
@@ -203,6 +213,54 @@ async def api_delete_whitelist(req: WhitelistDeleteRequest):
     if not ok:
         raise HTTPException(status_code=404, detail=msg)
     return {"ok": True, "msg": msg}
+
+
+@app.post("/api/banned/query")
+async def api_banned_query(req: BannedQueryRequest):
+    """查询 IP 在各平台是否被封禁。"""
+    if not config.has_any_provider:
+        raise HTTPException(status_code=400, detail="未检测到有效的云平台配置")
+
+    parsed = ip_utils.parse_ip_input(req.ip)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="无效的 IP 地址")
+    ip_cidr = parsed[0]
+
+    all_results: list[dict] = []
+    for pk, cfg in config.providers.items():
+        if not cfg.configured:
+            continue
+        try:
+            result = await asyncio.to_thread(query_on_provider, pk, ip_cidr, cfg)
+            all_results.extend(result)
+        except Exception as e:
+            all_results.append({
+                "provider": pk, "provider_name": cfg.name,
+                "found": False, "location": "", "location_id": "",
+                "matched_cidr": "", "error": str(e),
+            })
+
+    return {"results": all_results}
+
+
+@app.post("/api/unban")
+async def api_unban(req: UnbanRequest):
+    """从指定平台解封 IP。"""
+    cfg = config.providers.get(req.provider)
+    if not cfg or not cfg.configured:
+        raise HTTPException(status_code=400, detail=f"平台 {req.provider} 未配置")
+
+    # 校验 IP 格式
+    parsed = ip_utils.parse_ip_input(req.ip)
+    if not parsed:
+        raise HTTPException(status_code=400, detail=f"无效的 IP 地址: {req.ip}")
+    ip_cidr = parsed[0]
+
+    outcome = await asyncio.to_thread(unban_on_provider, req.provider, ip_cidr, cfg, req.location_id)
+    if outcome != "ok":
+        raise HTTPException(status_code=500, detail=outcome)
+
+    return {"ok": True, "msg": f"已从 {cfg.name} 解封 {ip_cidr}"}
 
 
 # ─── 启动 ──────────────────────────────────────────────────────

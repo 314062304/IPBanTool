@@ -101,6 +101,110 @@ def ban_alibaba(ip_cidr: str, cfg: ProviderConfig) -> str:
         return f"阿里云封禁失败: {e}"
 
 
+def _get_alibaba_address_list(client, book_name: str, group_type: str) -> list[str] | None:
+    """获取阿里云地址簿中所有 CIDR 条目列表。"""
+    from alibabacloud_cloudfw20171207 import models as cloudfw_models
+
+    req = cloudfw_models.DescribeAddressBookRequest(
+        query=book_name,
+        group_type=group_type,
+        page_size=20,
+        current_page=1,
+    )
+    resp = client.describe_address_book(req)
+
+    if not resp.body or not resp.body.acls:
+        return None
+
+    for item in resp.body.acls:
+        if item.group_name == book_name and item.group_type == group_type:
+            if item.address_list:
+                return [x.strip() for x in item.address_list.split(",") if x.strip()]
+    return None
+
+
+def query_alibaba(ip_cidr: str, cfg: ProviderConfig) -> list[dict]:
+    """在阿里云地址簿中搜索 IP（子网匹配）。
+
+    返回 [{provider, provider_name, found, location, location_id, matched_cidr}, ...]
+    即使未找到也会返回一条 found=False 的记录，供前端展示「已检查」状态。
+    """
+    import ipaddress
+
+    try:
+        search_net = ipaddress.ip_network(ip_cidr, strict=False)
+    except ValueError:
+        return [{"provider": "alibabacloud", "provider_name": "阿里云·云防火墙",
+                 "found": False, "location": "", "location_id": "", "matched_cidr": ""}]
+
+    results: list[dict] = []
+    client = _build_alibaba_client(cfg)
+
+    for ip_ver, (name_key, group_type) in ALIBABA_ADDRESS_BOOK_MAP.items():
+        book_name = cfg.get(name_key)
+        if not book_name:
+            continue
+
+        entries = _get_alibaba_address_list(client, book_name, group_type)
+        if not entries:
+            continue
+
+        matched = []
+        for entry in entries:
+            try:
+                entry_net = ipaddress.ip_network(entry, strict=False)
+                if search_net.subnet_of(entry_net):
+                    matched.append(entry)
+            except ValueError:
+                continue
+
+        for m in matched:
+            results.append({
+                "provider": "alibabacloud",
+                "provider_name": "阿里云·云防火墙",
+                "found": True,
+                "location": book_name,
+                "location_id": "",
+                "matched_cidr": m,
+            })
+
+    if not results:
+        results.append({"provider": "alibabacloud", "provider_name": "阿里云·云防火墙",
+                        "found": False, "location": "", "location_id": "", "matched_cidr": ""})
+
+    return results
+
+
+def unban_alibaba(ip_cidr: str, cfg: ProviderConfig) -> str:
+    """从阿里云地址簿移除 IP（解封）。"""
+    try:
+        from alibabacloud_cloudfw20171207 import models as cloudfw_models
+
+        ip_ver = get_ip_version(ip_cidr)
+        if ip_ver not in ALIBABA_ADDRESS_BOOK_MAP:
+            return f"不支持的 IP 版本"
+        name_key, group_type = ALIBABA_ADDRESS_BOOK_MAP[ip_ver]
+        book_name = cfg.get(name_key)
+
+        client = _build_alibaba_client(cfg)
+        book_uuid = _resolve_address_book_uuid(client, book_name, group_type)
+        if not book_uuid:
+            return f"未找到地址簿 '{book_name}'"
+
+        req = cloudfw_models.ModifyAddressBookRequest(
+            group_uuid=book_uuid,
+            group_name=book_name,
+            address_list=ip_cidr,
+            modify_mode="Remove",
+            description=cfg.get("DESCRIPTION"),
+        )
+        client.modify_address_book(req)
+        return "ok"
+
+    except Exception as e:
+        return f"阿里云解封失败: {e}"
+
+
 # ─── 腾讯云 · CVM安全组（自动管理）─────────────────────────
 #
 # 流程：
@@ -331,6 +435,116 @@ def ban_tencent(ip_cidr: str, cfg: ProviderConfig) -> str:
         return f"腾讯云封禁失败: {e}"
 
 
+def _find_all_tencent_sgs(client, prefix: str) -> list[tuple[str, str]]:
+    """查找所有名称以 prefix 开头的安全组，返回 [(sg_id, sg_name), ...]。"""
+    from tencentcloud.vpc.v20170312 import models as vpc_models
+
+    req = vpc_models.DescribeSecurityGroupsRequest()
+    req.Limit = "100"
+    resp = client.DescribeSecurityGroups(req)
+
+    results: list[tuple[str, str]] = []
+    if resp and resp.SecurityGroupSet:
+        for sg in resp.SecurityGroupSet:
+            name = sg.SecurityGroupName or ""
+            if name.startswith(prefix):
+                results.append((sg.SecurityGroupId, name))
+    return results
+
+
+def _get_tencent_banned_cidrs_all(client, sg_id: str) -> set[str]:
+    """获取安全组中所有 DROP 规则的 CIDR（含 IPv4 + IPv6）。"""
+    from tencentcloud.vpc.v20170312 import models as vpc_models
+
+    req = vpc_models.DescribeSecurityGroupPoliciesRequest()
+    req.SecurityGroupId = sg_id
+    resp = client.DescribeSecurityGroupPolicies(req)
+
+    banned: set[str] = set()
+    if resp and resp.SecurityGroupPolicySet:
+        for rule in resp.SecurityGroupPolicySet.Ingress or []:
+            if rule.Action == "DROP":
+                if rule.CidrBlock:
+                    banned.add(rule.CidrBlock)
+                if hasattr(rule, 'Ipv6CidrBlock') and rule.Ipv6CidrBlock:
+                    banned.add(rule.Ipv6CidrBlock)
+    return banned
+
+
+def query_tencent(ip_cidr: str, cfg: ProviderConfig) -> list[dict]:
+    """在腾讯云所有安全组中搜索 IP（子网匹配）。
+
+    遍历所有前缀匹配的安全组，逐一检查 DROP 规则。
+    返回 [{provider, provider_name, found, location, location_id, matched_cidr}, ...]
+    """
+    import ipaddress
+
+    try:
+        search_net = ipaddress.ip_network(ip_cidr, strict=False)
+    except ValueError:
+        return [{"provider": "tencentcloud", "provider_name": "腾讯云·CVM安全组",
+                 "found": False, "location": "", "location_id": "", "matched_cidr": ""}]
+
+    results: list[dict] = []
+    client = _build_tencent_client(cfg)
+    prefix = cfg.get("SG_NAME_PREFIX")
+    sgs = _find_all_tencent_sgs(client, prefix)
+
+    for sg_id, sg_name in sgs:
+        cidrs = _get_tencent_banned_cidrs_all(client, sg_id)
+        for banned_cidr in cidrs:
+            try:
+                banned_net = ipaddress.ip_network(banned_cidr, strict=False)
+                if search_net.subnet_of(banned_net):
+                    results.append({
+                        "provider": "tencentcloud",
+                        "provider_name": "腾讯云·CVM安全组",
+                        "found": True,
+                        "location": sg_name,
+                        "location_id": sg_id,
+                        "matched_cidr": banned_cidr,
+                    })
+            except ValueError:
+                continue
+
+    if not results:
+        results.append({"provider": "tencentcloud", "provider_name": "腾讯云·CVM安全组",
+                        "found": False, "location": "", "location_id": "", "matched_cidr": ""})
+
+    return results
+
+
+def unban_tencent(ip_cidr: str, sg_id: str, cfg: ProviderConfig) -> str:
+    """从指定腾讯云安全组移除 DROP 规则（解封）。"""
+    try:
+        from tencentcloud.vpc.v20170312 import models as vpc_models
+
+        client = _build_tencent_client(cfg)
+        ip_ver = get_ip_version(ip_cidr)
+
+        req = vpc_models.DeleteSecurityGroupPoliciesRequest()
+        req.SecurityGroupId = sg_id
+
+        policy = vpc_models.SecurityGroupPolicy()
+        policy.Protocol = "ALL"
+        policy.Port = "ALL"
+        if ip_ver == 6:
+            policy.Ipv6CidrBlock = ip_cidr
+        else:
+            policy.CidrBlock = ip_cidr
+        policy.Action = "DROP"
+
+        policy_set = vpc_models.SecurityGroupPolicySet()
+        policy_set.Ingress = [policy]
+
+        req.Policies = policy_set
+        client.DeleteSecurityGroupPolicies(req)
+        return "ok"
+
+    except Exception as e:
+        return f"腾讯云解封失败: {e}"
+
+
 # ─── 提供者注册表 ─────────────────────────────────────────────
 
 PROVIDER_BAN_MAP = {
@@ -358,4 +572,51 @@ def ban_on_provider(provider_key: str, ip_cidr: str, cfg: ProviderConfig) -> str
     func = PROVIDER_BAN_MAP.get(provider_key)
     if not func:
         return f"未知平台: {provider_key}"
+    return func(ip_cidr, cfg)
+
+
+# ─── 查询注册表 ───────────────────────────────────────────────
+
+PROVIDER_QUERY_MAP = {
+    "alibabacloud": query_alibaba,
+    "tencentcloud": query_tencent,
+}
+
+
+def query_on_provider(provider_key: str, ip_cidr: str, cfg: ProviderConfig) -> list[dict]:
+    """在指定 provider 上查询 IP 封禁状态。"""
+    func = PROVIDER_QUERY_MAP.get(provider_key)
+    if not func:
+        return [{"provider": provider_key, "provider_name": provider_key,
+                 "found": False, "location": "", "location_id": "", "matched_cidr": ""}]
+    return func(ip_cidr, cfg)
+
+
+# ─── 解封注册表 ───────────────────────────────────────────────
+
+PROVIDER_UNBAN_MAP = {
+    "alibabacloud": unban_alibaba,
+    "tencentcloud": unban_tencent,
+}
+
+
+def unban_on_provider(provider_key: str, ip_cidr: str, cfg: ProviderConfig,
+                      location_id: str | None = None) -> str:
+    """在指定 provider 上执行解封。
+
+    Args:
+        provider_key: "alibabacloud" | "tencentcloud"
+        ip_cidr: 要移除的精确 CIDR
+        cfg: 该 provider 的配置
+        location_id: 腾讯云需要安全组 ID，阿里云不需要
+
+    Returns:
+        "ok" 或错误消息
+    """
+    func = PROVIDER_UNBAN_MAP.get(provider_key)
+    if not func:
+        return f"未知平台: {provider_key}"
+    # 腾讯云需要 location_id，阿里云不需要
+    if provider_key == "tencentcloud":
+        return func(ip_cidr, location_id, cfg) if location_id else f"缺少安全组 ID"
     return func(ip_cidr, cfg)
