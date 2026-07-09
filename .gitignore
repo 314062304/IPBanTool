@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 *.spec
 build/
+# 白名单文件（含生产业务 IP，禁止提交）
+whitelist.txt
+whitelist.json
