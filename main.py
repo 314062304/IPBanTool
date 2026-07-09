@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -52,6 +53,16 @@ class BanRequest(BaseModel):
 class BanResponse(BaseModel):
     results: dict[str, dict[str, str]]   # { ip: { provider: "ok"|错误 } }
     summary: dict[str, int]              # { ok: N, fail: M }
+
+
+class WhitelistAddRequest(BaseModel):
+    ip: str
+    group: str = "未分组"
+
+
+class WhitelistDeleteRequest(BaseModel):
+    ip: str
+    group: str
 
 
 # ─── 路由 ──────────────────────────────────────────────────────
@@ -113,31 +124,85 @@ async def api_ban(req: BanRequest):
     if not valid_providers:
         raise HTTPException(status_code=400, detail="没有可用的封禁平台")
 
+    # 3.5 白名单检查
+    whitelist_json_path = _get_whitelist_json_path()
+    whitelist_cidrs = ip_utils.load_whitelist(config.whitelist_path, whitelist_json_path) if config.whitelist_path else []
+
     # 4. 执行封禁
     results: dict[str, dict[str, str]] = {}
     ok_count = 0
     fail_count = 0
+    whitelisted_count = 0
 
     for ip_cidr in parsed_ips:
         ip_results: dict[str, str] = {}
-        for pk, cfg in valid_providers:
-            try:
-                # 在线程池中执行，避免阻塞事件循环
-                outcome = await asyncio.to_thread(ban_on_provider, pk, ip_cidr, cfg)
-                ip_results[pk] = outcome
-                if outcome == "ok":
-                    ok_count += 1
-                else:
+
+        # 白名单命中检查
+        if whitelist_cidrs and ip_utils.is_whitelisted(ip_cidr, whitelist_cidrs):
+            print(f"[WHITELIST] 跳过封禁白名单 IP: {ip_cidr}")
+            for pk, cfg in valid_providers:
+                ip_results[pk] = "whitelisted"
+            whitelisted_count += 1
+        else:
+            for pk, cfg in valid_providers:
+                try:
+                    # 在线程池中执行，避免阻塞事件循环
+                    outcome = await asyncio.to_thread(ban_on_provider, pk, ip_cidr, cfg)
+                    ip_results[pk] = outcome
+                    if outcome == "ok":
+                        ok_count += 1
+                    else:
+                        fail_count += 1
+                except Exception as e:
+                    ip_results[pk] = f"执行异常: {e}"
                     fail_count += 1
-            except Exception as e:
-                ip_results[pk] = f"执行异常: {e}"
-                fail_count += 1
         results[ip_cidr] = ip_results
 
     return BanResponse(
         results=results,
-        summary={"ok": ok_count, "fail": fail_count},
+        summary={"ok": ok_count, "fail": fail_count, "whitelisted": whitelisted_count},
     )
+
+
+def _get_whitelist_json_path() -> str:
+    """返回 whitelist.json 的路径（与 whitelist.txt 同目录）。"""
+    if config.whitelist_path:
+        return os.path.join(os.path.dirname(config.whitelist_path), "whitelist.json")
+    return ""
+
+
+@app.get("/api/whitelist")
+async def api_get_whitelist():
+    """返回白名单条目列表（含分组）。"""
+    json_path = _get_whitelist_json_path()
+    entries = ip_utils.load_whitelist_json(json_path) if json_path else []
+    return {"entries": entries}
+
+
+@app.post("/api/whitelist")
+async def api_add_whitelist(req: WhitelistAddRequest):
+    """添加白名单条目。"""
+    json_path = _get_whitelist_json_path()
+    if not json_path:
+        raise HTTPException(status_code=500, detail="白名单未配置")
+
+    ok, msg = ip_utils.add_whitelist_entry(req.ip, req.group, json_path)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "msg": msg}
+
+
+@app.delete("/api/whitelist")
+async def api_delete_whitelist(req: WhitelistDeleteRequest):
+    """删除白名单条目。"""
+    json_path = _get_whitelist_json_path()
+    if not json_path:
+        raise HTTPException(status_code=500, detail="白名单未配置")
+
+    ok, msg = ip_utils.remove_whitelist_entry(req.ip, req.group, json_path)
+    if not ok:
+        raise HTTPException(status_code=404, detail=msg)
+    return {"ok": True, "msg": msg}
 
 
 # ─── 启动 ──────────────────────────────────────────────────────
